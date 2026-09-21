@@ -1,0 +1,381 @@
+# =============================================================================
+# NAVAM — Helm Values (default / dev overrides)
+# Override per environment: values.staging.yaml / values.production.yaml
+# Secrets are injected at runtime via HashiCorp Vault Agent Injector.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global settings shared by all sub-charts and templates
+# ---------------------------------------------------------------------------
+global:
+  imagePrefix: "ghcr.io/the-six-sense/navam"
+  imageTag: "latest"           # Overridden by CD pipeline with git SHA
+  imagePullPolicy: IfNotPresent
+  environment: production
+  # ImagePullSecrets for GHCR (create with: kubectl create secret docker-registry ghcr-secret ...)
+  imagePullSecrets:
+    - name: ghcr-secret
+
+  # Vault integration
+  vault:
+    enabled: true
+    address: "https://vault.navam.internal:8200"
+    role: "navam-app"
+    authPath: "auth/kubernetes"
+
+  # Shared labels added to every resource
+  labels:
+    app.kubernetes.io/part-of: navam
+    app.kubernetes.io/managed-by: Helm
+
+# ---------------------------------------------------------------------------
+# Bitnami PostgreSQL sub-chart (disabled in prod — use RDS)
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: false  # Use AWS RDS in staging/production
+  auth:
+    database: navam
+    username: navam
+    password: ""  # Set via Vault / Kubernetes Secret
+  primary:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# Bitnami Redis sub-chart (disabled in prod — use ElastiCache)
+# ---------------------------------------------------------------------------
+redis:
+  enabled: false  # Use AWS ElastiCache in staging/production
+  auth:
+    enabled: false
+  master:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Bitnami Kafka sub-chart (disabled in prod — use MSK)
+# ---------------------------------------------------------------------------
+kafka:
+  enabled: false  # Use AWS MSK in staging/production
+
+# ---------------------------------------------------------------------------
+# External service endpoints (RDS, ElastiCache, MSK)
+# Reference Vault secret paths; actual values are never stored here.
+# ---------------------------------------------------------------------------
+externalServices:
+  database:
+    host: ""        # e.g. navam.cluster-xxx.ap-south-1.rds.amazonaws.com
+    port: 5432
+    name: navam
+    # Secret injected by Vault: vault:secret/navam/database#url
+    secretName: navam-db-secret
+    secretKey: DATABASE_URL
+
+  redis:
+    host: ""        # e.g. navam-redis.xxx.cache.amazonaws.com
+    port: 6379
+    secretName: navam-redis-secret
+    secretKey: REDIS_URL
+
+  kafka:
+    bootstrapServers: ""  # e.g. b-1.navam.xxx.kafka.ap-south-1.amazonaws.com:9092
+    secretName: navam-kafka-secret
+    secretKey: KAFKA_BOOTSTRAP_SERVERS
+
+# ---------------------------------------------------------------------------
+# API Service
+# ---------------------------------------------------------------------------
+api:
+  replicaCount: 2
+
+  image:
+    repository: "{{ .Values.global.imagePrefix }}-api"
+    tag: "{{ .Values.global.imageTag }}"
+    pullPolicy: "{{ .Values.global.imagePullPolicy }}"
+
+  service:
+    type: ClusterIP
+    port: 8000
+    targetPort: 8000
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Horizontal Pod Autoscaler
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+      - type: Resource
+        resource:
+          name: memory
+          target:
+            type: Utilization
+            averageUtilization: 80
+
+  # Probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Pod Disruption Budget
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+  # Anti-affinity: spread pods across nodes
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values: [navam-api]
+            topologyKey: kubernetes.io/hostname
+
+  # Environment config (non-secret)
+  env:
+    LOG_LEVEL: INFO
+    DEMO_MODE: "false"
+    ENVIRONMENT: production
+    KEYCLOAK_REALM: navam
+    KEYCLOAK_CLIENT_ID: navam-api
+
+  # Vault secret injection annotations
+  vaultAnnotations:
+    vault.hashicorp.com/agent-inject: "true"
+    vault.hashicorp.com/role: "navam-app"
+    vault.hashicorp.com/agent-inject-secret-config: "secret/navam/api"
+
+  serviceAccount:
+    create: true
+    name: navam-api
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/navam-api-irsa"
+
+# ---------------------------------------------------------------------------
+# ML Serving Service
+# ---------------------------------------------------------------------------
+mlServing:
+  replicaCount: 1
+
+  image:
+    repository: "{{ .Values.global.imagePrefix }}-ml"
+    tag: "{{ .Values.global.imageTag }}"
+    pullPolicy: "{{ .Values.global.imagePullPolicy }}"
+
+  service:
+    type: ClusterIP
+    port: 8001
+    targetPort: 8001
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  hpa:
+    enabled: false  # Inference is stateful — scale manually
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8001
+    initialDelaySeconds: 60
+    periodSeconds: 20
+    timeoutSeconds: 10
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 8001
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+  env:
+    LOG_LEVEL: INFO
+    ENVIRONMENT: production
+
+  serviceAccount:
+    create: true
+    name: navam-ml-serving
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/navam-ml-irsa"
+
+# ---------------------------------------------------------------------------
+# Worker (Kafka consumer)
+# ---------------------------------------------------------------------------
+worker:
+  replicaCount: 2
+
+  image:
+    repository: "{{ .Values.global.imagePrefix }}-worker"
+    tag: "{{ .Values.global.imageTag }}"
+    pullPolicy: "{{ .Values.global.imagePullPolicy }}"
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+  env:
+    LOG_LEVEL: INFO
+    KAFKA_GROUP_ID: navam-worker
+    ENVIRONMENT: production
+
+  serviceAccount:
+    create: true
+    name: navam-worker
+
+# ---------------------------------------------------------------------------
+# Web Frontend (Next.js / Vite)
+# ---------------------------------------------------------------------------
+web:
+  replicaCount: 2
+
+  image:
+    repository: "{{ .Values.global.imagePrefix }}-web"
+    tag: "{{ .Values.global.imageTag }}"
+    pullPolicy: "{{ .Values.global.imagePullPolicy }}"
+
+  service:
+    type: ClusterIP
+    port: 3000
+    targetPort: 3000
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  hpa:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+
+  pdb:
+    enabled: true
+    minAvailable: 1
+
+  serviceAccount:
+    create: true
+    name: navam-web
+
+# ---------------------------------------------------------------------------
+# Ingress (NGINX Ingress Controller)
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  host: navam.example.gov.in
+  tilesHost: tiles.navam.example.gov.in
+
+  tls:
+    enabled: true
+    secretName: navam-tls-secret
+    # cert-manager ClusterIssuer name
+    issuer: letsencrypt-prod
+
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+
+# ---------------------------------------------------------------------------
+# Canary deployment settings (managed by CD pipeline)
+# ---------------------------------------------------------------------------
+canary:
+  enabled: false
+  weight: 0  # Percentage of traffic routed to canary (5, 25, 100)
+
+# ---------------------------------------------------------------------------
+# Monitoring (Prometheus ServiceMonitor)
+# ---------------------------------------------------------------------------
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    scrapeTimeout: 10s
+    namespace: monitoring

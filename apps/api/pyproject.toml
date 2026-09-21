@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "navam_api"
+version = "0.1.0"
+description = "NAVAM API"
+authors = [{name = "NAVAM Team"}]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn>=0.23",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "alembic",
+    "psycopg2-binary",
+    "redis"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx"
+]

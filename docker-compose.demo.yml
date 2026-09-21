@@ -1,0 +1,246 @@
+# =============================================================================
+# NAVAM — Demo Stack (boots < 60s)
+# Near-real-time Analysis of Vulnerability and Adaptive Migration
+# =============================================================================
+# Usage: make demo
+# Stripped to 8 services: postgres, redis, keycloak, martin,
+#                          api (DEMO_MODE=true), ml-serving,
+#                          prometheus, grafana
+# =============================================================================
+
+version: "3.9"
+
+networks:
+  navam-net:
+    driver: bridge
+    name: navam-net
+
+volumes:
+  pgdata:
+    name: navam_pgdata
+  redis_data:
+    name: navam_redis_data
+  grafana_data:
+    name: navam_grafana_data
+  prometheus_data:
+    name: navam_prometheus_data
+  mlflow_artifacts:
+    name: navam_mlflow_artifacts
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 + PostGIS 3.4
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: navam-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: navam
+      POSTGRES_USER: navam
+      POSTGRES_PASSWORD: navam_dev_secret
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U navam -d navam"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: navam-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Keycloak 24.0 — in-memory DB for fast demo boot
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: navam-keycloak
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: dev-mem
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    command: start-dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Martin Tile Server
+  # ---------------------------------------------------------------------------
+  martin:
+    image: ghcr.io/maplibre/martin:v0.13.0
+    container_name: navam-martin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./infra/docker/martin/martin-config.yaml:/martin-config.yaml:ro
+    command: ["--config", "/martin-config.yaml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/catalog || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # NAVAM API — DEMO_MODE=true (uses seeded synthetic data, no Kafka)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+      target: development
+    container_name: navam-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://navam:navam_dev_secret@postgres:5432/navam
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: navam
+      KEYCLOAK_CLIENT_ID: navam-api
+      KEYCLOAK_CLIENT_SECRET: demo-secret
+      ML_SERVING_URL: http://ml-serving:8001
+      MLFLOW_TRACKING_URI: ""
+      MARTIN_URL: http://martin:3000
+      SECRET_KEY: demo-secret-key-not-for-production-use
+      LOG_LEVEL: INFO
+      DEMO_MODE: "true"
+      ENVIRONMENT: demo
+    volumes:
+      - ./apps/api:/app:cached
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # ML Serving
+  # ---------------------------------------------------------------------------
+  ml-serving:
+    build:
+      context: ./services/ml/serving
+      dockerfile: Dockerfile
+      target: development
+    container_name: navam-ml-serving
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://navam:navam_dev_secret@postgres:5432/navam
+      MLFLOW_TRACKING_URI: ""
+      DEMO_MODE: "true"
+      LOG_LEVEL: INFO
+      ENVIRONMENT: demo
+    volumes:
+      - ./services/ml/serving:/app:cached
+      - mlflow_artifacts:/mlflow/artifacts:ro
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Prometheus
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: navam-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Grafana — pre-provisioned with Prometheus datasource
+  # Port 3001 (3000 is Martin)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: navam-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://localhost:3001"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net

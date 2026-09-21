@@ -1,0 +1,69 @@
+apiVersion: v2
+
+name: navam
+description: >
+  NAVAM — Near-real-time Analysis of Vulnerability and Adaptive Migration.
+  Umbrella Helm chart for the full NAVAM disaster management platform.
+  Deployed on AWS EKS (ap-south-1), managed via ArgoCD (GitOps).
+
+# 'application' | 'library'
+type: application
+
+# Chart version (SemVer 2) — bump on every infra change
+version: 0.1.0
+
+# Application version (matches the Docker image tags)
+appVersion: "0.1.0"
+
+# ---------------------------------------------------------------------------
+# Chart Dependencies
+# Add sub-charts from Bitnami and other trusted registries.
+# Run `helm dependency update infra/k8s/navam` after changing this list.
+# ---------------------------------------------------------------------------
+dependencies:
+
+  # PostgreSQL with PostGIS (Bitnami)
+  - name: postgresql
+    version: "15.5.21"
+    repository: "https://charts.bitnami.com/bitnami"
+    alias: postgresql
+    condition: postgresql.enabled
+
+  # Redis (Bitnami)
+  - name: redis
+    version: "19.6.4"
+    repository: "https://charts.bitnami.com/bitnami"
+    alias: redis
+    condition: redis.enabled
+
+  # Apache Kafka (Bitnami)
+  - name: kafka
+    version: "29.3.4"
+    repository: "https://charts.bitnami.com/bitnami"
+    alias: kafka
+    condition: kafka.enabled
+
+keywords:
+  - disaster-management
+  - navam
+  - sih2026
+  - geospatial
+  - evacuation
+  - ndrf
+  - mha
+
+home: https://github.com/the-six-sense/navam
+sources:
+  - https://github.com/the-six-sense/navam
+
+maintainers:
+  - name: The Six Sense
+    email: team@navam.example.gov.in
+    url: https://github.com/the-six-sense
+
+icon: https://raw.githubusercontent.com/the-six-sense/navam/main/docs/assets/navam-icon.png
+
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/license: MIT
+  artifacthub.io/containsSecurityUpdates: "false"

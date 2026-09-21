@@ -1,0 +1,408 @@
+# =============================================================================
+# NAVAM — Kubernetes Deployment: API (FastAPI)
+# Managed by: Helm (infra/k8s/navam)
+# Namespace: navam
+# =============================================================================
+
+---
+# ---------------------------------------------------------------------------
+# Deployment
+# ---------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navam-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: navam
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: navam-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0          # Zero-downtime rolling update
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: navam-api
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: navam
+      annotations:
+        # Force pod restart when ConfigMap changes
+        checksum/config: {{ include (print $.Template.BasePath "/api-configmap.yaml") . | sha256sum }}
+        # Vault Agent Injector
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "navam-app"
+        vault.hashicorp.com/agent-inject-secret-config.env: "secret/navam/api"
+        vault.hashicorp.com/agent-inject-template-config.env: |
+          {{`{{- with secret "secret/navam/api" -}}
+          export DATABASE_URL="{{ .Data.data.DATABASE_URL }}"
+          export REDIS_URL="{{ .Data.data.REDIS_URL }}"
+          export SECRET_KEY="{{ .Data.data.SECRET_KEY }}"
+          export KEYCLOAK_CLIENT_SECRET="{{ .Data.data.KEYCLOAK_CLIENT_SECRET }}"
+          export SENTRY_DSN="{{ .Data.data.SENTRY_DSN }}"
+          {{- end }}`}}
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: {{ .Values.api.serviceAccount.name }}
+
+      # -----------------------------------------------------------------------
+      # Security context for the pod
+      # -----------------------------------------------------------------------
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # -----------------------------------------------------------------------
+      # Init container: wait for database to be ready
+      # -----------------------------------------------------------------------
+      initContainers:
+        - name: wait-for-db
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z -w 3 ${DB_HOST} ${DB_PORT}; do
+                echo "Waiting for database at ${DB_HOST}:${DB_PORT}..."
+                sleep 3
+              done
+              echo "Database is ready."
+          env:
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: navam-api-config
+                  key: DB_HOST
+            - name: DB_PORT
+              value: "5432"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+
+      containers:
+        - name: api
+          image: "{{ .Values.global.imagePrefix }}-api:{{ .Values.global.imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+
+          # -------------------------------------------------------------------
+          # Security context for the container
+          # -------------------------------------------------------------------
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false   # FastAPI writes /tmp logs
+            capabilities:
+              drop: [ALL]
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          # -------------------------------------------------------------------
+          # Non-secret environment variables from ConfigMap
+          # -------------------------------------------------------------------
+          envFrom:
+            - configMapRef:
+                name: navam-api-config
+
+          # -------------------------------------------------------------------
+          # Secret env vars sourced from Kubernetes Secret (or Vault-injected)
+          # -------------------------------------------------------------------
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalServices.database.secretName }}
+                  key: {{ .Values.externalServices.database.secretKey }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.externalServices.redis.secretName }}
+                  key: {{ .Values.externalServices.redis.secretKey }}
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: navam-api-secret
+                  key: SECRET_KEY
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: navam-api-secret
+                  key: KEYCLOAK_CLIENT_SECRET
+            - name: LOG_LEVEL
+              value: {{ .Values.api.env.LOG_LEVEL | quote }}
+            - name: DEMO_MODE
+              value: {{ .Values.api.env.DEMO_MODE | quote }}
+            - name: ENVIRONMENT
+              value: {{ .Values.api.env.ENVIRONMENT | quote }}
+            - name: KEYCLOAK_REALM
+              value: {{ .Values.api.env.KEYCLOAK_REALM | quote }}
+            - name: KEYCLOAK_CLIENT_ID
+              value: {{ .Values.api.env.KEYCLOAK_CLIENT_ID | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
+          # -------------------------------------------------------------------
+          # Resource limits and requests
+          # -------------------------------------------------------------------
+          resources:
+            requests:
+              cpu: {{ .Values.api.resources.requests.cpu }}
+              memory: {{ .Values.api.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.api.resources.limits.cpu }}
+              memory: {{ .Values.api.resources.limits.memory }}
+
+          # -------------------------------------------------------------------
+          # Liveness probe — restart container if unhealthy
+          # -------------------------------------------------------------------
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.api.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.api.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.api.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.api.livenessProbe.failureThreshold }}
+            successThreshold: 1
+
+          # -------------------------------------------------------------------
+          # Readiness probe — remove from LB if not ready
+          # -------------------------------------------------------------------
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: {{ .Values.api.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.api.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.api.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.api.readinessProbe.failureThreshold }}
+            successThreshold: 1
+
+          # Startup probe — gives more time on cold start (model loading)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}
+
+      # -----------------------------------------------------------------------
+      # Pod scheduling
+      # -----------------------------------------------------------------------
+      affinity:
+        # Spread API pods across different nodes for HA
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - navam-api
+              topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - navam-api
+                topologyKey: topology.kubernetes.io/zone
+
+      # Only schedule on nodes with this label (dedicated app nodes)
+      nodeSelector:
+        role: application
+
+      tolerations:
+        - key: "dedicated"
+          operator: "Equal"
+          value: "application"
+          effect: "NoSchedule"
+
+      # Graceful shutdown — wait for in-flight requests to complete
+      terminationGracePeriodSeconds: 30
+
+      imagePullSecrets:
+        {{- toYaml .Values.global.imagePullSecrets | nindent 8 }}
+
+---
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: navam-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: navam
+spec:
+  type: {{ .Values.api.service.type }}
+  selector:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: {{ .Values.api.service.targetPort }}
+      protocol: TCP
+
+---
+# ---------------------------------------------------------------------------
+# ServiceAccount
+# ---------------------------------------------------------------------------
+{{- if .Values.api.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.api.serviceAccount.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: navam
+  annotations:
+    {{- toYaml .Values.api.serviceAccount.annotations | nindent 4 }}
+{{- end }}
+
+---
+# ---------------------------------------------------------------------------
+# ConfigMap — non-secret environment variables
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: navam-api-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: navam
+data:
+  DB_HOST: {{ .Values.externalServices.database.host | quote }}
+  DB_PORT: "5432"
+  DB_NAME: {{ .Values.externalServices.database.name | quote }}
+  KEYCLOAK_URL: "https://auth.navam.example.gov.in"
+  KEYCLOAK_REALM: {{ .Values.api.env.KEYCLOAK_REALM | quote }}
+  KEYCLOAK_CLIENT_ID: {{ .Values.api.env.KEYCLOAK_CLIENT_ID | quote }}
+  ML_SERVING_URL: "http://navam-ml-serving:8001"
+  MARTIN_URL: "http://navam-martin:3000"
+  MLFLOW_TRACKING_URI: "https://mlflow.navam.internal"
+  AWS_REGION: {{ .Values.global.awsRegion | default "ap-south-1" | quote }}
+  LOG_LEVEL: {{ .Values.api.env.LOG_LEVEL | quote }}
+  DEMO_MODE: {{ .Values.api.env.DEMO_MODE | quote }}
+  ENVIRONMENT: {{ .Values.api.env.ENVIRONMENT | quote }}
+
+---
+# ---------------------------------------------------------------------------
+# HorizontalPodAutoscaler
+# ---------------------------------------------------------------------------
+{{- if .Values.api.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: navam-api
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: navam
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: navam-api
+  minReplicas: {{ .Values.api.hpa.minReplicas }}
+  maxReplicas: {{ .Values.api.hpa.maxReplicas }}
+  metrics:
+    {{- toYaml .Values.api.hpa.metrics | nindent 4 }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300   # Wait 5 min before scaling down
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+{{- end }}
+
+---
+# ---------------------------------------------------------------------------
+# PodDisruptionBudget — ensures at least 1 API pod survives node drains
+# ---------------------------------------------------------------------------
+{{- if .Values.api.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: navam-api-pdb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: navam-api
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: navam
+spec:
+  minAvailable: {{ .Values.api.pdb.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: navam-api
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

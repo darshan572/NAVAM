@@ -1,0 +1,272 @@
+# =============================================================================
+# NAVAM — .gitignore
+# Covers: Python, Node/JS, Terraform, Docker, IDE, geospatial data, ML
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Python
+# ─────────────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env.bak
+*.venv
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.whl
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+.hypothesis/
+.tox/
+nosetests.xml
+pytest.xml
+
+# mypy / pyright
+.mypy_cache/
+.dmypy.json
+dmypy.json
+pyrightconfig.json  # Keep pyproject.toml settings, not local overrides
+
+# ruff
+.ruff_cache/
+
+# IPython
+profile_default/
+ipython_config.py
+*.ipynb_checkpoints/
+
+# Type stubs
+*.pyi  # Keep only if you generate them intentionally
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment / Secrets — NEVER commit these
+# ─────────────────────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+*.env
+!.env.example         # Keep the example file
+
+# Vault tokens
+.vault-token
+vault_token
+
+# AWS credentials
+.aws/
+credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Node / JavaScript / TypeScript
+# ─────────────────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+.next/
+out/
+.nuxt/
+.output/
+.vercel/
+.svelte-kit/
+
+# Cache
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# Testing
+coverage/
+.nyc_output/
+
+# Storybook
+storybook-static/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Terraform
+# ─────────────────────────────────────────────────────────────────────────────
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+terraform.tfvars          # Contains secrets — use vault or CI env
+terraform.tfvars.json
+
+# Keep example tfvars
+!terraform.tfvars.example
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker
+# ─────────────────────────────────────────────────────────────────────────────
+docker-compose.override.yml     # Local overrides — not committed
+docker-compose.local.yml
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE — VS Code
+# ─────────────────────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json       # Keep recommended extensions list
+!.vscode/settings.json         # Keep shared project settings
+!.vscode/*.code-workspace      # Keep workspace files
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE — JetBrains / PyCharm
+# ─────────────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.idea_modules/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# IDE — Other
+# ─────────────────────────────────────────────────────────────────────────────
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Geospatial data files (large, binary — store in S3 / DVC)
+# ─────────────────────────────────────────────────────────────────────────────
+data/raw/
+data/interim/
+data/processed/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+*.fbn
+*.fbx
+*.ain
+*.aih
+*.atx
+*.ixs
+*.mxs
+*.qpj
+*.qmd
+
+# GeoJSON bulk files (keep small reference files)
+data/**/*.geojson
+data/**/*.json
+!data/sample/*.geojson          # Keep curated sample data
+!docs/**/*.geojson              # Keep documentation examples
+
+# Raster / imagery
+*.tif
+*.tiff
+*.img
+*.hdf
+*.nc
+*.grib
+*.grib2
+*.h5
+*.zarr/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ML artifacts / model files (store in MLflow / S3)
+# ─────────────────────────────────────────────────────────────────────────────
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+*.pb
+*.tflite
+*.safetensors
+*.bin           # HuggingFace model weights
+
+# MLflow artifacts directory
+mlruns/
+mlflow_artifacts/
+services/ml/models/trained/
+services/ml/artifacts/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Airflow
+# ─────────────────────────────────────────────────────────────────────────────
+airflow.db
+airflow.cfg
+unittests.cfg
+logs/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logs
+# ─────────────────────────────────────────────────────────────────────────────
+*.log
+*.log.*
+logs/
+log/
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Temporary / scratch files
+# ─────────────────────────────────────────────────────────────────────────────
+tmp/
+temp/
+scratch/
+*.tmp
+*.bak
+*.orig
+*.rej

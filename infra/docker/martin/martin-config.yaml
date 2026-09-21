@@ -1,0 +1,104 @@
+# =============================================================================
+# NAVAM — Martin Tile Server Configuration
+# Serves MapLibre Vector Tiles (MVT) from PostGIS tables
+# Docs: https://maplibre.org/martin/
+# =============================================================================
+
+# Listen address and port
+listen_addresses: "0.0.0.0:3000"
+
+# Keep-alive timeout
+keep_alive: 75
+
+# Worker threads (0 = num_cpus)
+worker_processes: 0
+
+# ---------------------------------------------------------------------------
+# Web UI — catalog and preview tiles
+# ---------------------------------------------------------------------------
+web_ui: true
+
+# ---------------------------------------------------------------------------
+# Tile cache (in-memory, set size in MB)
+# ---------------------------------------------------------------------------
+cache_size_mb: 128
+
+# ---------------------------------------------------------------------------
+# Shutdown timeout in seconds
+# ---------------------------------------------------------------------------
+shutdown_timeout: 3600
+
+# ---------------------------------------------------------------------------
+# PostgreSQL connection pool
+# ---------------------------------------------------------------------------
+postgres:
+  # Connection string — substituted at runtime from environment or config
+  connection: postgresql://navam:navam_dev_secret@postgres:5432/navam
+
+  # Pool configuration
+  pool_size: 10
+  pool_timeout_sec: 30
+
+  # ---------------------------------------------------------------------------
+  # Auto-publish ALL tables with geometry columns from the navam schema
+  # ---------------------------------------------------------------------------
+  auto_publish:
+    tables:
+      # Auto-detect all tables with geometry columns
+      from_schemas:
+        - navam
+
+      # Optional: override per-table settings
+      # Individual tables listed below take precedence over auto-detect
+      tables:
+        habitations:
+          schema: navam
+          table: habitations
+          srid: 4326
+          geometry_column: geom
+          geometry_type: POINT
+          minzoom: 4
+          maxzoom: 18
+          id_column: id
+          # Expose these columns as tile properties
+          properties:
+            - id
+            - lgd_code
+            - name
+            - district
+            - state
+            - population
+            - households
+
+        safe_sites:
+          schema: navam
+          table: safe_sites
+          srid: 4326
+          geometry_column: geom
+          geometry_type: POINT
+          minzoom: 4
+          maxzoom: 18
+          id_column: id
+          properties:
+            - id
+            - name
+            - site_type
+            - capacity
+            - district
+            - state
+
+# ---------------------------------------------------------------------------
+# CORS — allow the web frontend and Grafana to access tiles
+# ---------------------------------------------------------------------------
+cors:
+  allowed_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3001"
+    - "http://localhost:8000"
+    - "*"  # Loosen for development; restrict in production
+
+# ---------------------------------------------------------------------------
+# Sprite and font directories (optional — for GL styles)
+# ---------------------------------------------------------------------------
+# sprites: /sprites
+# fonts: /fonts

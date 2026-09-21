@@ -1,0 +1,11 @@
+cmd: python src/data/make_dataset.py
+deps:
+- path: src/data/make_dataset.py
+  hash: md5
+  md5: 0f69613f0c2d312b64c29a83f1d64046
+  size: 1019
+outs:
+- path: data/raw/data.csv
+  hash: md5
+  md5: b72d8d32b715fcab7a515d9b6fbcde3f
+  size: 82532

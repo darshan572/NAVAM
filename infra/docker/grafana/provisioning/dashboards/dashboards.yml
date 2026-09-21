@@ -1,0 +1,20 @@
+# =============================================================================
+# NAVAM — Grafana Dashboard Provisioning
+# Tells Grafana where to find pre-built dashboard JSON files.
+# =============================================================================
+
+apiVersion: 1
+
+providers:
+  - name: 'NAVAM Dashboards'
+    orgId: 1
+    folder: 'NAVAM'
+    folderUid: 'navam-dashboards'
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true

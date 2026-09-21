@@ -1,0 +1,499 @@
+# =============================================================================
+# NAVAM — Full Development Stack
+# Near-real-time Analysis of Vulnerability and Adaptive Migration
+# =============================================================================
+# Usage: make up
+# All services on network: navam-net
+# =============================================================================
+
+version: "3.9"
+
+networks:
+  navam-net:
+    driver: bridge
+    name: navam-net
+
+volumes:
+  pgdata:
+    name: navam_pgdata
+  redis_data:
+    name: navam_redis_data
+  kafka_data:
+    name: navam_kafka_data
+  zookeeper_data:
+    name: navam_zookeeper_data
+  zookeeper_log:
+    name: navam_zookeeper_log
+  mlflow_artifacts:
+    name: navam_mlflow_artifacts
+  grafana_data:
+    name: navam_grafana_data
+  loki_data:
+    name: navam_loki_data
+  airflow_logs:
+    name: navam_airflow_logs
+  prometheus_data:
+    name: navam_prometheus_data
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 + PostGIS 3.4
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: navam-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: navam
+      POSTGRES_USER: navam
+      POSTGRES_PASSWORD: navam_dev_secret
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/docker/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U navam -d navam"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: navam-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --save 60 1 --loglevel warning --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # ZooKeeper (required for Kafka)
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: navam-zookeeper
+    restart: unless-stopped
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Apache Kafka (via Confluent Platform 7.6)
+  # Topics: imd-rainfall, cwc-flood, gsi-landslide, lgd-updates
+  # ---------------------------------------------------------------------------
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: navam-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9092:9092"    # internal (within Docker network)
+      - "29092:29092"  # external (host access)
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Kafka Topic Initializer (one-shot)
+  # Creates: imd-rainfall, cwc-flood, gsi-landslide, lgd-updates
+  # ---------------------------------------------------------------------------
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: navam-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/bash", "-c"]
+    command: |
+      "
+      echo 'Waiting for Kafka to be ready...'
+      kafka-topics --bootstrap-server kafka:9092 --list
+
+      echo 'Creating topics...'
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic imd-rainfall   --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic cwc-flood      --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic gsi-landslide  --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:9092 --create --if-not-exists --topic lgd-updates    --partitions 1 --replication-factor 1
+
+      echo 'Topics created successfully:'
+      kafka-topics --bootstrap-server kafka:9092 --list
+      "
+    networks:
+      - navam-net
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # Confluent Schema Registry
+  # ---------------------------------------------------------------------------
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: navam-schema-registry
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/subjects || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Keycloak 24.0 — Identity & Access Management
+  # Realm: navam, Admin console at /
+  # ---------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: navam-keycloak
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: dev-mem
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+    command: start-dev
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 90s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Martin Tile Server (Rust) — PostGIS → MVT tiles
+  # ---------------------------------------------------------------------------
+  martin:
+    image: ghcr.io/maplibre/martin:v0.13.0
+    container_name: navam-martin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./infra/docker/martin/martin-config.yaml:/martin-config.yaml:ro
+    command: ["--config", "/martin-config.yaml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/catalog || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # MLflow Tracking Server
+  # Backend: PostgreSQL (navam_mlflow DB)
+  # Artifact store: local volume (swap for S3 in prod)
+  # ---------------------------------------------------------------------------
+  mlflow:
+    image: python:3.12-slim
+    container_name: navam-mlflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "5001:5001"
+    volumes:
+      - mlflow_artifacts:/mlflow/artifacts
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://navam:navam_dev_secret@postgres:5432/navam_mlflow
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    command: >
+      bash -c "
+        pip install --quiet mlflow psycopg2-binary &&
+        mlflow server
+          --backend-store-uri postgresql://navam:navam_dev_secret@postgres:5432/navam_mlflow
+          --default-artifact-root /mlflow/artifacts
+          --host 0.0.0.0
+          --port 5001
+          --serve-artifacts
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — Metrics collection
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: navam-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Grafana — Observability dashboards
+  # Port 3001 (3000 is Martin)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: navam-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+      - loki
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://localhost:3001"
+      GF_FEATURE_TOGGLES_ENABLE: "lokiExploreLogsDefaultRange"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./infra/docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Grafana Loki — Log aggregation
+  # ---------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: navam-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Apache Airflow 2.9 — DAG orchestration
+  # Port 8082 (8080 is Keycloak, 8081 is Schema Registry)
+  # ---------------------------------------------------------------------------
+  airflow:
+    image: apache/airflow:2.9.3-python3.12
+    container_name: navam-airflow
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://navam:navam_dev_secret@postgres:5432/navam_airflow
+      AIRFLOW__CORE__FERNET_KEY: ""
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: airflow
+      _AIRFLOW_WWW_USER_PASSWORD: airflow
+    volumes:
+      - ./services/airflow/dags:/opt/airflow/dags:ro
+      - airflow_logs:/opt/airflow/logs
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\" || curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # NAVAM API (FastAPI)
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+      target: development
+    container_name: navam-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://navam:navam_dev_secret@postgres:5432/navam
+      REDIS_URL: redis://redis:6379/0
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: navam
+      KEYCLOAK_CLIENT_ID: navam-api
+      KEYCLOAK_CLIENT_SECRET: change-me-in-production
+      ML_SERVING_URL: http://ml-serving:8001
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+      MARTIN_URL: http://martin:3000
+      SECRET_KEY: dev-secret-key-change-in-production-min-32-chars
+      LOG_LEVEL: DEBUG
+      DEMO_MODE: "false"
+      ENVIRONMENT: development
+    volumes:
+      - ./apps/api:/app:cached
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # ML Serving (FastAPI + model inference)
+  # ---------------------------------------------------------------------------
+  ml-serving:
+    build:
+      context: ./services/ml/serving
+      dockerfile: Dockerfile
+      target: development
+    container_name: navam-ml-serving
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://navam:navam_dev_secret@postgres:5432/navam
+      MLFLOW_TRACKING_URI: http://mlflow:5001
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+    volumes:
+      - ./services/ml/serving:/app:cached
+      - mlflow_artifacts:/mlflow/artifacts:ro
+    networks:
+      - navam-net
+
+  # ---------------------------------------------------------------------------
+  # Kafka Worker (event consumer / async processor)
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: ./apps/worker
+      dockerfile: Dockerfile
+      target: development
+    container_name: navam-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://navam:navam_dev_secret@postgres:5432/navam
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_GROUP_ID: navam-worker
+      ML_SERVING_URL: http://ml-serving:8001
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+    volumes:
+      - ./apps/worker:/app:cached
+    networks:
+      - navam-net

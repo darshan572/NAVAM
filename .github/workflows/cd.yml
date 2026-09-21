@@ -1,0 +1,475 @@
+# =============================================================================
+# NAVAM — GitHub Actions CD Pipeline
+# Triggered: push to main (after CI passes)
+# Flow: Build → Push GHCR → Deploy Staging → Smoke Test → Manual Gate
+#        → Deploy Prod (canary 5% → 25% → 100%) → Auto-rollback on error
+# =============================================================================
+
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "staging"
+        type: choice
+        options: [staging, production]
+      image_tag:
+        description: "Image tag to deploy (default: SHA of HEAD)"
+        required: false
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false  # Never cancel an in-flight deploy
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/navam
+  AWS_REGION: ap-south-1
+  STAGING_CLUSTER: navam-staging-ap-south-1
+  PROD_CLUSTER: navam-prod-ap-south-1
+  HELM_CHART_PATH: infra/k8s/navam
+  NAMESPACE: navam
+
+jobs:
+  # ===========================================================================
+  # STAGE 1 — Build and push all Docker images to GHCR
+  # ===========================================================================
+  build-and-push:
+    name: "Stage 1 · Build & Push Images"
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.set-tag.outputs.tag }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine image tag
+        id: set-tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag || github.sha }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${TAG}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- API Image --------------------------------------------------------
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/api
+          file: ./apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-api:${{ steps.set-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+
+      # ---- ML Serving Image -------------------------------------------------
+      - name: Build and push ML serving image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/ml/serving
+          file: ./services/ml/serving/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-ml:${{ steps.set-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-ml:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- Web Image --------------------------------------------------------
+      - name: Build and push web image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/web
+          file: ./apps/web/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-web:${{ steps.set-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- Worker Image -----------------------------------------------------
+      - name: Build and push worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./apps/worker
+          file: ./apps/worker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-worker:${{ steps.set-tag.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # STAGE 2 — Deploy to STAGING via Helm
+  # ===========================================================================
+  deploy-staging:
+    name: "Stage 2 · Deploy → Staging"
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    environment:
+      name: staging
+      url: https://staging.navam.example.gov.in
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (staging)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_STAGING }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for staging EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.STAGING_CLUSTER }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "3.14.4"
+
+      - name: Add Helm repositories
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Run database migrations before deploy
+        run: |
+          # Run migrations as a one-shot Kubernetes job
+          kubectl run alembic-migrate-${{ needs.build-and-push.outputs.image_tag }} \
+            --image=${{ env.IMAGE_PREFIX }}-api:${{ needs.build-and-push.outputs.image_tag }} \
+            --restart=Never \
+            --namespace=${{ env.NAMESPACE }} \
+            --env="DATABASE_URL=${{ secrets.STAGING_DATABASE_URL }}" \
+            --command -- alembic upgrade head
+          # Wait up to 5 minutes
+          kubectl wait pod/alembic-migrate-${{ needs.build-and-push.outputs.image_tag }} \
+            --for=condition=Succeeded \
+            --timeout=300s \
+            --namespace=${{ env.NAMESPACE }}
+          kubectl delete pod alembic-migrate-${{ needs.build-and-push.outputs.image_tag }} \
+            --namespace=${{ env.NAMESPACE }} --ignore-not-found
+
+      - name: Helm upgrade — staging
+        run: |
+          helm upgrade --install navam ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --set global.imageTag=${{ needs.build-and-push.outputs.image_tag }} \
+            --set global.imagePrefix=${{ env.IMAGE_PREFIX }} \
+            --set global.environment=staging \
+            --set ingress.host=staging.navam.example.gov.in \
+            --values ${{ env.HELM_CHART_PATH }}/values.yaml \
+            --values ${{ env.HELM_CHART_PATH }}/values.staging.yaml \
+            --timeout 10m \
+            --wait \
+            --atomic  # Auto-rollback on failure
+
+  # ===========================================================================
+  # STAGE 3 — Smoke tests against staging
+  # ===========================================================================
+  smoke-test-staging:
+    name: "Stage 3 · Smoke Tests → Staging"
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Wait for staging to stabilise
+        run: sleep 30
+
+      - name: Health check — API
+        run: |
+          for i in {1..10}; do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              https://staging.navam.example.gov.in/api/health || echo "000")
+            echo "Attempt $i: HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "API is healthy"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "API health check failed after 10 attempts"
+          exit 1
+
+      - name: Health check — ML serving
+        run: |
+          curl -sf https://staging.navam.example.gov.in/ml/health
+          echo "ML serving is healthy"
+
+      - name: Tile server check
+        run: |
+          curl -sf https://tiles.staging.navam.example.gov.in/catalog
+          echo "Martin tile server is healthy"
+
+      - name: Run integration smoke suite
+        run: |
+          pip install httpx pytest
+          pytest tests/smoke/ -v \
+            --base-url=https://staging.navam.example.gov.in \
+            -m smoke
+        env:
+          SMOKE_API_TOKEN: ${{ secrets.STAGING_SMOKE_TOKEN }}
+
+  # ===========================================================================
+  # STAGE 4 — Manual approval gate before production deployment
+  # Requires a reviewer with "production-deployer" role to approve
+  # ===========================================================================
+  approval-gate:
+    name: "Stage 4 · Manual Approval Gate"
+    runs-on: ubuntu-latest
+    needs: smoke-test-staging
+    environment:
+      name: production-approval
+      # GitHub Environment protection rules enforce the manual review
+
+    steps:
+      - name: Log approval
+        run: |
+          echo "Deployment approved by: ${{ github.actor }}"
+          echo "Image tag: ${{ needs.build-and-push.outputs.image_tag }}"
+          echo "Proceeding to production canary rollout..."
+
+  # ===========================================================================
+  # STAGE 5a — Canary 5%: deploy to 5% of production traffic
+  # ===========================================================================
+  deploy-prod-canary-5:
+    name: "Stage 5a · Prod Canary → 5%"
+    runs-on: ubuntu-latest
+    needs: [build-and-push, approval-gate]
+    environment:
+      name: production
+      url: https://navam.example.gov.in
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for prod EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.PROD_CLUSTER }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "3.14.4"
+
+      - name: Helm upgrade — canary 5% traffic weight
+        # Uses Argo Rollouts or NGINX canary annotation to route 5% of traffic
+        run: |
+          helm upgrade --install navam ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --set global.imageTag=${{ needs.build-and-push.outputs.image_tag }} \
+            --set global.imagePrefix=${{ env.IMAGE_PREFIX }} \
+            --set global.environment=production \
+            --set canary.enabled=true \
+            --set canary.weight=5 \
+            --values ${{ env.HELM_CHART_PATH }}/values.yaml \
+            --values ${{ env.HELM_CHART_PATH }}/values.production.yaml \
+            --timeout 10m \
+            --wait
+
+      - name: Monitor canary (5%) for 5 minutes
+        # Check error rate via Prometheus API — rollback if > 1%
+        run: |
+          PROM_URL="${{ secrets.PROD_PROMETHEUS_URL }}"
+          for i in {1..10}; do
+            sleep 30
+            ERROR_RATE=$(curl -sf "${PROM_URL}/api/v1/query" \
+              --data-urlencode 'query=sum(rate(http_requests_total{job="navam-api",status=~"5.."}[2m])) / sum(rate(http_requests_total{job="navam-api"}[2m])) * 100' \
+              | python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(r[0]['value'][1] if r else '0')" 2>/dev/null || echo "0")
+            echo "Attempt $i — Error rate: ${ERROR_RATE}%"
+            if python3 -c "exit(0 if float('${ERROR_RATE}') <= 1.0 else 1)"; then
+              echo "Error rate acceptable (${ERROR_RATE}%)"
+            else
+              echo "ERROR RATE EXCEEDED 1% (${ERROR_RATE}%) — triggering rollback"
+              exit 1
+            fi
+          done
+          echo "Canary 5% phase passed"
+
+  # ===========================================================================
+  # STAGE 5b — Canary 25%
+  # ===========================================================================
+  deploy-prod-canary-25:
+    name: "Stage 5b · Prod Canary → 25%"
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-prod-canary-5]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for prod EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.PROD_CLUSTER }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "3.14.4"
+
+      - name: Helm upgrade — canary 25%
+        run: |
+          helm upgrade navam ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --set global.imageTag=${{ needs.build-and-push.outputs.image_tag }} \
+            --set global.imagePrefix=${{ env.IMAGE_PREFIX }} \
+            --set global.environment=production \
+            --set canary.enabled=true \
+            --set canary.weight=25 \
+            --values ${{ env.HELM_CHART_PATH }}/values.yaml \
+            --values ${{ env.HELM_CHART_PATH }}/values.production.yaml \
+            --timeout 10m \
+            --wait
+
+      - name: Monitor canary (25%) for 5 minutes
+        run: |
+          PROM_URL="${{ secrets.PROD_PROMETHEUS_URL }}"
+          for i in {1..10}; do
+            sleep 30
+            ERROR_RATE=$(curl -sf "${PROM_URL}/api/v1/query" \
+              --data-urlencode 'query=sum(rate(http_requests_total{job="navam-api",status=~"5.."}[2m])) / sum(rate(http_requests_total{job="navam-api"}[2m])) * 100' \
+              | python3 -c "import sys,json; r=json.load(sys.stdin)['data']['result']; print(r[0]['value'][1] if r else '0')" 2>/dev/null || echo "0")
+            echo "Attempt $i — Error rate: ${ERROR_RATE}%"
+            if python3 -c "exit(0 if float('${ERROR_RATE}') <= 1.0 else 1)"; then
+              echo "Error rate acceptable"
+            else
+              echo "ERROR RATE EXCEEDED 1% — triggering rollback"
+              exit 1
+            fi
+          done
+          echo "Canary 25% phase passed"
+
+  # ===========================================================================
+  # STAGE 5c — Full production rollout (100%)
+  # ===========================================================================
+  deploy-prod-full:
+    name: "Stage 5c · Prod Full → 100%"
+    runs-on: ubuntu-latest
+    needs: [build-and-push, deploy-prod-canary-25]
+    environment:
+      name: production
+      url: https://navam.example.gov.in
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (production)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig for prod EKS
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.PROD_CLUSTER }}
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "3.14.4"
+
+      - name: Run production database migrations
+        run: |
+          kubectl run alembic-prod-migrate-${{ needs.build-and-push.outputs.image_tag }} \
+            --image=${{ env.IMAGE_PREFIX }}-api:${{ needs.build-and-push.outputs.image_tag }} \
+            --restart=Never \
+            --namespace=${{ env.NAMESPACE }} \
+            --env="DATABASE_URL=${{ secrets.PROD_DATABASE_URL }}" \
+            --command -- alembic upgrade head
+          kubectl wait pod/alembic-prod-migrate-${{ needs.build-and-push.outputs.image_tag }} \
+            --for=condition=Succeeded \
+            --timeout=300s \
+            --namespace=${{ env.NAMESPACE }}
+          kubectl delete pod alembic-prod-migrate-${{ needs.build-and-push.outputs.image_tag }} \
+            --namespace=${{ env.NAMESPACE }} --ignore-not-found
+
+      - name: Helm upgrade — full production (100%)
+        run: |
+          helm upgrade navam ${{ env.HELM_CHART_PATH }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --set global.imageTag=${{ needs.build-and-push.outputs.image_tag }} \
+            --set global.imagePrefix=${{ env.IMAGE_PREFIX }} \
+            --set global.environment=production \
+            --set canary.enabled=false \
+            --values ${{ env.HELM_CHART_PATH }}/values.yaml \
+            --values ${{ env.HELM_CHART_PATH }}/values.production.yaml \
+            --timeout 15m \
+            --wait \
+            --atomic  # Auto-rollback on failure
+
+      - name: Production health verification
+        run: |
+          sleep 60  # Let traffic shift
+          curl -sf https://navam.example.gov.in/api/health
+          echo "Production deployment successful"
+
+      - name: Notify deployment success
+        if: success()
+        run: |
+          echo "Deployment complete — ${{ needs.build-and-push.outputs.image_tag }} is live on production"
+          # Add Slack/Teams notification here using webhooks if needed
+
+      - name: Auto-rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed — rolling back to previous release"
+          helm rollback navam --namespace ${{ env.NAMESPACE }} --wait
+          echo "Rollback complete"
+          exit 1

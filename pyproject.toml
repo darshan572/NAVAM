@@ -1,0 +1,168 @@
+# =============================================================================
+# NAVAM — Root pyproject.toml
+# Tool configuration for ruff, pyright, and pytest.
+# This file is NOT a Python package — it configures dev tooling only.
+# =============================================================================
+
+[tool.ruff]
+# Target Python 3.12 (matches Docker base image)
+target-version = "py312"
+line-length = 100
+
+# Directories to lint
+src = ["apps/api/src", "services/ml", "apps/worker/src", "infra/scripts"]
+
+# ---------------------------------------------------------------------------
+# Rule selection
+# E/W  — pycodestyle errors and warnings
+# F    — pyflakes (undefined names, unused imports)
+# I    — isort (import ordering)
+# N    — pep8-naming
+# UP   — pyupgrade (modern Python idioms)
+# B    — flake8-bugbear (common bugs and design issues)
+# ANN  — flake8-annotations (type annotation enforcement)
+# S    — flake8-bandit (security checks — subset)
+# SIM  — flake8-simplify
+# TCH  — flake8-type-checking (TYPE_CHECKING guard)
+# ---------------------------------------------------------------------------
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "ANN",  # flake8-annotations
+    "S",    # flake8-bandit (security)
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "ANN101",  # Missing type annotation for 'self'
+    "ANN102",  # Missing type annotation for 'cls'
+    "ANN401",  # Dynamically typed 'Any' — allow where needed
+    "S101",    # assert used — needed in pytest tests
+    "S104",    # Binding to 0.0.0.0 — expected in FastAPI/uvicorn
+    "B008",    # Function call in default arg — FastAPI Depends pattern
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Relax annotations and security rules in test files
+"tests/*"           = ["ANN", "S", "SIM"]
+"**/tests/*"        = ["ANN", "S", "SIM"]
+"infra/scripts/*"   = ["ANN", "S"]
+# Allow print() in scripts
+"infra/scripts/*"   = ["T201"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["navam", "api", "worker"]
+force-sort-within-sections = true
+split-on-trailing-comma = true
+
+[tool.ruff.lint.flake8-annotations]
+allow-star-arg-any = true
+mypy-init-return = true
+
+[tool.ruff.format]
+# Use double quotes (Black-compatible)
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "lf"
+
+# ---------------------------------------------------------------------------
+# Pyright — static type checking
+# ---------------------------------------------------------------------------
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+
+# Virtual environment (created by uv / pip)
+venvPath = "."
+venv = ".venv"
+
+# Paths to include/exclude
+include = [
+    "apps/api/src",
+    "services/ml",
+    "apps/worker/src",
+]
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    "**/node_modules",
+    "infra/",
+    "**/*.pyc",
+]
+
+# Report missing imports as errors
+reportMissingImports = true
+reportMissingTypeStubs = false  # Third-party stubs not always available
+reportUnknownMemberType = false  # SQLAlchemy dynamic attributes
+reportUnknownVariableType = false
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"  # All async tests run with anyio automatically
+
+testpaths = [
+    "apps/api/tests",
+    "services/ml/tests",
+    "apps/worker/tests",
+]
+
+# Markers
+markers = [
+    "smoke: quick sanity tests (< 1s each)",
+    "integration: tests that require a live database or external service",
+    "unit: pure unit tests (no I/O)",
+    "slow: long-running tests (model training, bulk loads)",
+    "e2e: end-to-end tests against a running stack",
+]
+
+# Only run fast tests by default; use -m 'not slow' or -m integration explicitly
+addopts = [
+    "--tb=short",
+    "--strict-markers",
+    "-q",
+    "--color=yes",
+]
+
+# Timeout per test (seconds) — prevents hung async tests
+timeout = 30
+
+# Filter known warnings
+filterwarnings = [
+    "ignore::DeprecationWarning:sqlalchemy",
+    "ignore::PendingDeprecationWarning",
+]
+
+# ---------------------------------------------------------------------------
+# Coverage (used when --cov flag is passed)
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["apps/api/src", "services/ml"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/migrations/*",
+    "*/alembic/*",
+]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 70  # Minimum 70% coverage
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+    "if __name__ == .__main__.:",
+]

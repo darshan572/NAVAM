@@ -1,0 +1,20 @@
+stages:
+  prepare:
+    cmd: python src/data/make_dataset.py
+    deps:
+      - src/data/make_dataset.py
+    outs:
+      - data/raw/data.csv
+  train:
+    cmd: python src/models/train.py
+    deps:
+      - data/raw/data.csv
+      - src/models/train.py
+    outs:
+      - models/xgb_mapie_model.pkl
+  evaluate:
+    cmd: python src/models/evaluate.py
+    deps:
+      - data/raw/data.csv
+      - models/xgb_mapie_model.pkl
+      - src/models/evaluate.py
