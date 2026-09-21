@@ -1,6 +1,6 @@
-# NAVAM
+# 🌍 NAVAM
 
-```
+```text
  ███╗   ██╗ █████╗ ██╗   ██╗ █████╗ ███╗   ███╗
  ████╗  ██║██╔══██╗██║   ██║██╔══██╗████╗ ████║
  ██╔██╗ ██║███████║██║   ██║███████║██╔████╔██║
@@ -9,229 +9,677 @@
  ╚═╝  ╚═══╝╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝     ╚═╝
 ```
 
-**Near-real-time Analysis of Vulnerability and Adaptive Migration**
+### **Near-real-time Analysis of Vulnerability and Adaptive Migration**
 
+<p align="center">
+  <strong>AI × GIS × Real-Time Data × Decision Intelligence</strong>
+</p>
+
+<p align="center">
+  <em>From hazard signals to explainable, actionable relocation decisions.</em>
+</p>
+
+<p align="center">
+
+[![SIH 2026](https://img.shields.io/badge/Smart%20India%20Hackathon-2026-orange?style=for-the-badge)](https://www.sih.gov.in/)
+[![Problem](https://img.shields.io/badge/Problem-SIH26191-red?style=for-the-badge)](#problem-statement)
 [![CI](https://github.com/the-six-sense/navam/actions/workflows/ci.yml/badge.svg)](https://github.com/the-six-sense/navam/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg)](https://fastapi.tiangolo.com)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg)](https://fastapi.tiangolo.com/)
 
-> **NAVAM doesn't predict disasters. It tells authorities what to do before they happen — and shows its work.**
-
----
-
-## Problem Statement
-
-**SIH 2026 — Problem ID: SIH26191**
-**Ministry: Ministry of Home Affairs (MHA) / NDRF**
-
-India faces an average of 250+ disaster events per year. The critical gap is not prediction — it is **decision lag**: the time between a hazard signal and the first actionable evacuation order. In the 2013 Kedarnath and 2023 Sikkim disasters, thousands of lives were lost not because the hazard was invisible, but because the response chain was too slow.
-
-NAVAM closes that gap. It ingests real-time data from IMD, CWC, GSI, and NDMA; scores every habitation across Uttarakhand for composite risk; and presents district-level responders with a ranked, explainable action plan — **not a dashboard to stare at, but an order to execute**.
+</p>
 
 ---
 
-## Team
-
-**THE SIX SENSE** — Smart India Hackathon 2026
+> ## 🚨 NAVAM doesn't just show where danger is.
+>
+> ## **It helps authorities decide what to do next — and shows why.**
 
 ---
 
-## Quick Start
+# 🧭 What is NAVAM?
 
-Five commands from zero to running demo:
+**NAVAM** is a geospatial and AI-powered disaster-management decision-support platform designed to transform multi-source hazard data into **habitation-level risk intelligence, evacuation priorities, relocation recommendations, and auditable decisions.**
 
-```bash
-# 1. Clone
-git clone https://github.com/the-six-sense/navam.git && cd navam
+Instead of forcing responders to interpret disconnected datasets, NAVAM connects the complete decision chain:
 
-# 2. Configure environment
-cp .env.example .env
-# Edit .env if needed — defaults work for local dev
-
-# 3. Start demo stack (boots in < 60s)
-make demo
-
-# 4. Seed synthetic data
-make db-seed
-
-# 5. Open the dashboard
-make open   # → http://localhost:5173
+```text
+        🌧️ HAZARD SIGNALS
+               │
+               ▼
+        🗺️ GEO-SPATIAL ANALYSIS
+               │
+               ▼
+        👥 VULNERABILITY
+               │
+               ▼
+        🧠 RISK SCORING
+               │
+               ▼
+        🔍 EXPLAINABLE AI
+               │
+               ▼
+        🚨 EVACUATION PRIORITY
+               │
+               ▼
+        📍 SAFE SITE SELECTION
+               │
+               ▼
+        📦 RESOURCE ALLOCATION
+               │
+               ▼
+        📜 AUDITABLE DECISION
 ```
 
-> **Prerequisites:** Docker Desktop 4.x, `make`, Python 3.12, Node.js 20
+---
+
+# 🎯 Problem Statement
+
+### **SIH 2026 — SIH26191**
+
+**Ministry:** Ministry of Home Affairs
+**Domain:** Disaster Management
+**Team:** THE SIX SENSE
+
+The critical challenge in disaster response is not only detecting a hazard. Authorities must rapidly determine:
+
+* **Which habitations are most vulnerable?**
+* **Who needs attention first?**
+* **Which routes remain usable?**
+* **Where can affected populations be relocated?**
+* **Does the destination have sufficient capacity?**
+* **Which resources are available?**
+* **Why did the system recommend this action?**
+* **Who made the final decision?**
+
+NAVAM is designed around this operational gap.
 
 ---
 
-## Architecture
+# ⚡ The NAVAM Difference
 
+Traditional disaster dashboards often answer:
+
+> **"What is happening?"**
+
+NAVAM is designed to move one step further:
+
+> **"What should the response team examine next?"**
+
+### From:
+
+```text
+Hazard Map
+    ↓
+Human Interpretation
+    ↓
+Manual Prioritisation
+    ↓
+Manual Planning
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Data Sources                                                    │
-│  IMD Rainfall · CWC Flood Gauge · GSI Landslide · LGD Registry │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ Kafka (imd-rainfall · cwc-flood
-                               │        gsi-landslide · lgd-updates)
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Worker Service (Kafka consumer)                                 │
-│  Normalises · enriches · triggers risk re-scoring               │
-└──────────────────────────────┬──────────────────────────────────┘
+
+### To:
+
+```text
+Live / Updated Data
+       ↓
+Spatial Intelligence
+       ↓
+Risk & Vulnerability Analysis
+       ↓
+Explainable Priority
+       ↓
+Route + Resource Analysis
+       ↓
+Relocation Intelligence
+       ↓
+Human Decision
+       ↓
+Audit Trail
+```
+
+---
+
+# 🖥️ Seven Decision Screens
+
+NAVAM is intentionally organized around **seven decision-oriented screens**.
+
+|      # | Screen                           | Decision Question                                    |
+| -----: | -------------------------------- | ---------------------------------------------------- |
+| **01** | 🗺️ **Risk Heatmap**             | Which habitations are in danger right now?           |
+| **02** | 🧠 **Habitation Scorecard**      | Why is this habitation at risk?                      |
+| **03** | 🚨 **Evacuation Priority Queue** | Who should be moved first?                           |
+| **04** | 🛣️ **Route Optimiser**          | Which routes are usable or blocked?                  |
+| **05** | 🚚 **Resource Allocation**       | Where are teams and resources required?              |
+| **06** | ⚠️ **Conflict Detector**         | Are response resources being deployed inefficiently? |
+| **07** | 📜 **Audit / Decision Trail**    | What happened, when, and by whom?                    |
+
+---
+
+# 🧠 Explainable Risk Intelligence
+
+NAVAM does not intend to turn disaster response into a black-box prediction.
+
+Each score can be decomposed into contributing factors.
+
+### Example
+
+```text
+┌────────────────────────────────────────────┐
+│        HABITATION PRIORITY                 │
+│                                            │
+│                 87.4                       │
+│                CRITICAL                    │
+├────────────────────────────────────────────┤
+│                                            │
+│  Landslide Susceptibility   ████████████   │
+│  Rainfall Exposure          ██████████     │
+│  Population Exposure        ████████       │
+│  Accessibility              ██████         │
+│  Historical Events          ████           │
+│                                            │
+└────────────────────────────────────────────┘
+```
+
+The system is designed to expose:
+
+* Model version
+* Input features
+* Feature contribution
+* Prediction
+* Confidence / uncertainty
+* Data timestamp
+
+---
+
+# 📍 Adaptive Relocation Intelligence
+
+When a habitation reaches a critical priority level, NAVAM evaluates potential relocation sites.
+
+```text
+                 AFFECTED HABITATION
+                         │
+                         ▼
+               ┌──────────────────┐
+               │ Candidate Sites   │
+               └────────┬─────────┘
+                        │
+        ┌───────────────┼───────────────┐
+        ▼               ▼               ▼
+      Safety         Capacity       Accessibility
+        │               │               │
+        └───────────────┼───────────────┘
+                        ▼
+                Site Suitability
+                        │
+                        ▼
+             Relocation Recommendation
+```
+
+### Candidate Site Example
+
+| Parameter           |     Result |
+| ------------------- | ---------: |
+| Affected Population |        892 |
+| Available Capacity  |      1,050 |
+| Distance            |     8.2 km |
+| Safety              |       High |
+| Accessibility       |       High |
+| Capacity            | Sufficient |
+
+---
+
+# 🏗️ System Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                        DATA SOURCES                         │
+│       IMD · CWC · GSI · LGD · Other GIS Sources            │
+└──────────────────────────────┬──────────────────────────────┘
                                │
                                ▼
-┌────────────────┐    ┌────────────────────┐    ┌───────────────┐
-│  PostGIS DB    │◄───│  FastAPI (NAVAM    │───►│  ML Serving   │
-│  + Redis cache │    │   API)             │    │  (sklearn +   │
-│                │    │  REST + WebSocket  │    │   OR-Tools)   │
-└────────────────┘    └────────────────────┘    └───────────────┘
-                               │
-                     ┌─────────┴──────────┐
-                     │  Martin Tile Server │
-                     │  PostGIS → MVT     │
-                     └─────────┬──────────┘
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │  Web Dashboard       │
-                    │  (React + MapLibre)  │
-                    └──────────────────────┘
+                    ┌──────────────────┐
+                    │      Kafka       │
+                    │ Event Streaming  │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │      Worker      │
+                    │ Normalize /      │
+                    │ Enrich / Score   │
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                             ▼
+     ┌─────────────────┐          ┌─────────────────┐
+     │ PostgreSQL      │          │ ML Serving      │
+     │ + PostGIS       │          │ sklearn/XGBoost │
+     │ + Redis         │          │ + OR-Tools      │
+     └────────┬────────┘          └────────┬────────┘
+              │                            │
+              └──────────────┬─────────────┘
+                             ▼
+                    ┌──────────────────┐
+                    │     FastAPI      │
+                    │ REST + WebSocket │
+                    └────────┬─────────┘
+                             │
+                  ┌──────────┴──────────┐
+                  ▼                     ▼
+          ┌──────────────┐      ┌───────────────┐
+          │ Martin Tiles │      │ React Web App │
+          │    MVT       │      │   MapLibre    │
+          └──────────────┘      └───────────────┘
 ```
 
-Full architecture documentation → [`docs/architecture/`](docs/architecture/)
-
 ---
 
-## The Seven Screens
+# 🔄 Decision Pipeline
 
-NAVAM presents exactly seven decision screens — no more, no less. Each screen answers a specific question a district responder would ask under pressure.
-
-| # | Screen | Question Answered |
-|---|--------|-------------------|
-| 1 | **Risk Heatmap** | Which habitations are in danger right now? |
-| 2 | **Habitation Scorecard** | Why is this habitation at risk? (SHAP explainability) |
-| 3 | **Evacuation Priority Queue** | Who do we move first? |
-| 4 | **Route Optimiser** | Which routes are safe? Which are blocked? |
-| 5 | **Resource Allocation** | Which trucks, teams, and helipads are available? |
-| 6 | **Conflict Detector** | Are two teams heading to the same site simultaneously? |
-| 7 | **Audit Log / Decision Trail** | What was done, when, and by whom? |
-
----
-
-## API Documentation
-
-| Endpoint | Description |
-|----------|-------------|
-| `http://localhost:8000/docs` | Swagger UI (interactive) |
-| `http://localhost:8000/redoc` | ReDoc (printable) |
-| `http://localhost:8000/health` | Liveness probe |
-| `http://localhost:8000/health/deep` | Deep health (DB + Redis + ML) |
-
----
-
-## Observability
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Grafana | `http://localhost:3001` | admin / admin |
-| Prometheus | `http://localhost:9090` | — |
-| MLflow | `http://localhost:5001` | — |
-| Airflow | `http://localhost:8082` | airflow / airflow |
-| Keycloak | `http://localhost:8080` | admin / admin |
-
----
-
-## Tech Stack
-
-| Layer | Technology | Version |
-|-------|-----------|---------|
-| API | FastAPI + uvicorn | 0.111 / 0.29 |
-| Database | PostgreSQL + PostGIS | 16 + 3.4 |
-| Cache | Redis | 7 |
-| Messaging | Apache Kafka (Confluent) | 7.6 |
-| Tile server | Martin (Rust, MapLibre) | 0.13 |
-| Auth | Keycloak | 24.0 |
-| ML training | scikit-learn, XGBoost | latest |
-| Route optimisation | Google OR-Tools | 9.x |
-| ML tracking | MLflow | 2.13 |
-| Orchestration | Apache Airflow | 2.9 |
-| Observability | Prometheus + Grafana + Loki | 2.52 / 10.4 / 3.0 |
-| Container orchestration | AWS EKS (Helm + ArgoCD) | 1.30 |
-| IaC | Terraform | 1.8 |
-| Frontend | React + MapLibre GL JS | 18 / 4.x |
-| CI/CD | GitHub Actions | — |
-
----
-
-## Repository Structure
-
+```text
+DATA
+ │
+ ├── IMD Rainfall
+ ├── CWC Flood
+ ├── GSI Landslide
+ └── LGD Registry
+ │
+ ▼
+INGESTION
+ │
+ ▼
+NORMALISATION
+ │
+ ▼
+SPATIAL PROCESSING
+ │
+ ▼
+FEATURE ENGINEERING
+ │
+ ▼
+ML / RISK ENGINE
+ │
+ ▼
+EXPLAINABILITY
+ │
+ ▼
+PRIORITY
+ │
+ ▼
+ROUTE + RESOURCE ANALYSIS
+ │
+ ▼
+RELOCATION INTELLIGENCE
+ │
+ ▼
+AUTHORITY DECISION
+ │
+ ▼
+AUDIT
 ```
+
+---
+
+# 🛠️ Technology Stack
+
+| Layer             | Technology                  |
+| ----------------- | --------------------------- |
+| 🎨 Frontend       | React + MapLibre GL JS      |
+| ⚡ API             | FastAPI + Uvicorn           |
+| 🗄️ Database      | PostgreSQL + PostGIS        |
+| 🚀 Cache          | Redis                       |
+| 📨 Messaging      | Apache Kafka                |
+| 🗺️ Tile Server   | Martin                      |
+| 🤖 ML             | Scikit-learn + XGBoost      |
+| 🧮 Optimisation   | Google OR-Tools             |
+| 📊 ML Tracking    | MLflow                      |
+| 🔄 Orchestration  | Apache Airflow              |
+| 🔐 Authentication | Keycloak                    |
+| 📈 Observability  | Prometheus + Grafana + Loki |
+| 🐳 Containers     | Docker                      |
+| ☁️ Infrastructure | AWS EKS + Helm + ArgoCD     |
+| 🏗️ IaC           | Terraform                   |
+| 🔁 CI/CD          | GitHub Actions              |
+
+---
+
+# 📦 Repository Structure
+
+```text
 NAVAM/
+│
 ├── apps/
-│   ├── api/            # FastAPI backend
-│   ├── web/            # React frontend (MapLibre)
-│   └── worker/         # Kafka event consumer
+│   ├── api/                    # FastAPI backend
+│   ├── web/                    # React + MapLibre frontend
+│   └── worker/                 # Kafka event consumer
+│
 ├── services/
 │   ├── ml/
-│   │   ├── training/   # Model training scripts
-│   │   └── serving/    # FastAPI inference server
+│   │   ├── training/           # Model training
+│   │   └── serving/            # ML inference
+│   │
 │   └── airflow/
-│       └── dags/       # Orchestration DAGs
+│       └── dags/               # Data pipelines
+│
 ├── infra/
-│   ├── docker/         # Dockerfiles and compose configs
-│   ├── k8s/navam/      # Helm chart (umbrella)
-│   ├── terraform/      # AWS infrastructure (IaC)
-│   └── scripts/        # Seed and maintenance scripts
-├── docs/               # Architecture, ADRs, runbooks
+│   ├── docker/                 # Docker configuration
+│   ├── k8s/navam/              # Helm deployment
+│   ├── terraform/              # AWS infrastructure
+│   └── scripts/                # Seed & maintenance
+│
+├── docs/
+│   ├── architecture/           # System architecture
+│   ├── adr/                    # Architecture decisions
+│   └── runbooks/               # Operational guides
+│
 ├── data/
-│   └── sample/         # Curated sample GeoJSON (synthetic)
-├── docker-compose.yml       # Full dev stack (14 services)
-├── docker-compose.demo.yml  # Minimal demo stack (8 services)
-├── Makefile                 # All dev workflow commands
-├── pyproject.toml           # Python tool config
-└── .env.example             # Environment template
+│   └── sample/                 # Synthetic demo data
+│
+├── docker-compose.yml
+├── docker-compose.demo.yml
+├── Makefile
+├── pyproject.toml
+└── .env.example
 ```
 
 ---
 
-## Development
+# 🚀 Quick Start
 
-### Useful commands
+### Prerequisites
+
+* Docker Desktop 4.x
+* `make`
+* Python 3.12
+* Node.js 20
+
+### 1. Clone
 
 ```bash
-make up          # Start full dev stack
-make demo        # Start minimal demo stack
-make down        # Stop all containers
-make logs        # Tail API + ML serving logs
-make db-migrate  # Run Alembic migrations
-make db-seed     # Load synthetic data
-make test        # Run all tests
-make lint        # Lint Python + JS
-make health      # Deep health check
-make score HABITATION_ID=<uuid>  # Score a habitation
+git clone https://github.com/the-six-sense/navam.git
+cd navam
 ```
 
-### Vertical Slice Discipline
+### 2. Configure
 
-Every feature is a **vertical slice** — frontend + API + DB + test in one PR.
+```bash
+cp .env.example .env
+```
 
-- No PR touches more than one domain without reviewer sign-off.
-- Tests live next to the code they test.
-- Migrations are atomic and reversible.
+### 3. Start Demo Stack
 
-→ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full review standard.
+```bash
+make demo
+```
+
+### 4. Seed Demo Data
+
+```bash
+make db-seed
+```
+
+### 5. Open Dashboard
+
+```bash
+make open
+```
+
+**Dashboard:** `http://localhost:5173`
 
 ---
 
-## Data Disclaimer
+# 🔌 API & Developer Tools
 
-All habitation data, population figures, and hazard readings used in the development and demo environment are **entirely synthetic**, generated by [`infra/scripts/seed_data.py`](infra/scripts/seed_data.py). They are not derived from any classified, restricted, or personally identifiable government dataset. The system is designed to connect to authoritative sources (IMD, CWC, GSI, LGD) via their official APIs when deployed in a government environment.
+| Service        | URL                                 |
+| -------------- | ----------------------------------- |
+| 📚 Swagger     | `http://localhost:8000/docs`        |
+| 📖 ReDoc       | `http://localhost:8000/redoc`       |
+| ❤️ Health      | `http://localhost:8000/health`      |
+| 🔬 Deep Health | `http://localhost:8000/health/deep` |
 
 ---
 
-## License
+# 📊 Observability
 
-MIT License — see [LICENSE](LICENSE) for details.
+| Service    | URL                     |
+| ---------- | ----------------------- |
+| Grafana    | `http://localhost:3001` |
+| Prometheus | `http://localhost:9090` |
+| MLflow     | `http://localhost:5001` |
+| Airflow    | `http://localhost:8082` |
+| Keycloak   | `http://localhost:8080` |
+
+> Default development credentials are documented in the local environment configuration. **Never use development credentials in production.**
 
 ---
 
-*Built with ❤️ for Smart India Hackathon 2026 · Problem SIH26191 · MHA/NDRF*
+# ⚙️ Development Commands
+
+```bash
+make up
+```
+
+Start the complete development stack.
+
+```bash
+make demo
+```
+
+Start the minimal demonstration environment.
+
+```bash
+make down
+```
+
+Stop all services.
+
+```bash
+make logs
+```
+
+View application logs.
+
+```bash
+make db-migrate
+```
+
+Run database migrations.
+
+```bash
+make db-seed
+```
+
+Load synthetic demonstration data.
+
+```bash
+make test
+```
+
+Run the complete test suite.
+
+```bash
+make lint
+```
+
+Run linting.
+
+```bash
+make health
+```
+
+Run the deep system health check.
+
+```bash
+make score HABITATION_ID=<uuid>
+```
+
+Generate a habitation score.
+
+---
+
+# 🧪 Engineering Discipline
+
+NAVAM follows a **vertical-slice development model**.
+
+Every meaningful feature should travel through the complete stack:
+
+```text
+Frontend
+   ↓
+API
+   ↓
+Service
+   ↓
+Database / ML
+   ↓
+Tests
+```
+
+### Core principles
+
+**01 — No UI claim without implementation**
+
+If it appears in the demo, it must work.
+
+**02 — Provenance first**
+
+Every important recommendation should be traceable.
+
+**03 — Explainable decisions**
+
+AI outputs should expose their contributing factors.
+
+**04 — Human authority**
+
+NAVAM supports decisions; authorized officials remain responsible for final action.
+
+**05 — Operational correctness**
+
+Timezone, idempotency, auditability, and failure handling are treated as correctness requirements.
+
+---
+
+# 🔐 Trust & Data Provenance
+
+NAVAM follows a traceability chain:
+
+```text
+Dataset
+   ↓
+Version
+   ↓
+Feature
+   ↓
+Model
+   ↓
+Prediction
+   ↓
+Explanation
+   ↓
+Recommendation
+   ↓
+Authority Decision
+   ↓
+Audit Record
+```
+
+This allows the team to answer:
+
+> **"Why did NAVAM recommend this?"**
+
+and:
+
+> **"What information and model produced that recommendation?"**
+
+---
+
+# 🧬 Data Disclaimer
+
+All habitation data, population figures, and hazard readings used in the current development and demonstration environment are **synthetic**.
+
+They are not derived from classified, restricted, or personally identifiable government datasets.
+
+The architecture is designed to support authoritative data sources such as **IMD, CWC, GSI, and LGD** when deployed in an appropriate government environment.
+
+---
+
+# 🗺️ Roadmap
+
+### Foundation
+
+* [x] Architecture
+* [ ] Authentication
+* [ ] PostGIS
+* [ ] CI/CD
+
+### GIS Intelligence
+
+* [ ] Interactive risk map
+* [ ] Hazard layers
+* [ ] Habitation layers
+* [ ] Population exposure
+
+### AI Intelligence
+
+* [ ] Feature engineering
+* [ ] Risk scoring
+* [ ] Model training
+* [ ] Explainability
+
+### Response Intelligence
+
+* [ ] Evacuation priority
+* [ ] Route optimisation
+* [ ] Resource allocation
+* [ ] Conflict detection
+
+### Relocation
+
+* [ ] Candidate site identification
+* [ ] Carrying capacity
+* [ ] Site ranking
+* [ ] Recommendation engine
+
+### Governance
+
+* [ ] Authority workflow
+* [ ] Decision overrides
+* [ ] Audit ledger
+* [ ] RBAC
+
+---
+
+# 👥 Team
+
+## THE SIX SENSE
+
+**Smart India Hackathon 2026**
+
+Building technology at the intersection of:
+
+`AI` · `GIS` · `Disaster Management` · `Machine Learning` · `Geospatial Intelligence`
+
+---
+
+# 📄 License
+
+This project is licensed under the **MIT License**.
+
+See [`LICENSE`](LICENSE) for details.
+
+---
+
+<div align="center">
+
+## 🌍 NAVAM
+
+### **See the risk. Understand the why. Decide what happens next.**
+
+**Built with ❤️ by THE SIX SENSE**
+Developer : Darshan Kumar
+
+*Smart India Hackathon 2026 · SIH26191*
+
+</div>
